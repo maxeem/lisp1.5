@@ -27,7 +27,11 @@ var (
 )
 
 func mkSym(s string) *Expr {
-	return &Expr{atom: strings.ToUpper(s)}
+	u := strings.ToUpper(s)
+	if u == "NIL" {
+		return nil // NIL is always the empty list / Go nil
+	}
+	return &Expr{atom: u}
 }
 
 func mkNum(n *big.Int) *Expr {
@@ -63,10 +67,10 @@ func isTrue(e *Expr) bool {
 	return true
 }
 
-// boolExpr converts a Go bool to T (true) or nil/NIL (false).
+// boolExpr converts a Go bool to *TRUE* or NIL, matching the IBM 7094 emulator.
 func boolExpr(b bool) *Expr {
 	if b {
-		return exprT
+		return exprTrue
 	}
 	return nil
 }

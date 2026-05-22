@@ -21,10 +21,13 @@ func apply(fn, x, a *Expr) *Expr {
 	}
 
 	if fn.atom != "" {
-		// fn is an atom — check built-ins first, then look it up.
-		switch fn.atom {
+		// CxR family: CAAR, CADR, CDAR, CDDR, … CDDDDR
+		if isCxR(fn.atom) {
+			return applyCxR(fn.atom, carOf(x))
+		}
 
-		// ── Elementary functions (page 13) ───────────────────────────────
+		switch fn.atom {
+		// ── Elementary functions (page 13) ─────────────────────────────
 		case "CAR":
 			return carOf(carOf(x))
 		case "CDR":
@@ -38,116 +41,111 @@ func apply(fn, x, a *Expr) *Expr {
 		case "NULL":
 			return boolExpr(isNull(carOf(x)))
 
-		// ── CAAR … CDDDDR family ─────────────────────────────────────────
-		default:
-			if isCxR(fn.atom) {
-				return applyCxR(fn.atom, carOf(x))
-			}
-			fallthrough
-		case "DEFINE":
-			if fn.atom == "DEFINE" {
-				return doDefine(x)
-			}
-			// Structural / logical
-			fallthrough
-		case "EQUAL", "NOT", "AND", "OR",
-			// Arithmetic
-			"PLUS", "TIMES", "DIFFERENCE", "QUOTIENT", "REMAINDER",
-			"ADD1", "SUB1",
-			// Comparison
-			"GREATERP", "LESSP", "NUMBERP", "ZEROP", "MINUSP",
-			// List operations
-			"LIST", "APPEND", "REVERSE", "LENGTH",
-			"MEMBER", "ASSOC", "PAIR", "PAIRLIS",
-			"MAPCAR", "APPLY", "PRINT":
+		// ── Equality / logic ────────────────────────────────────────────
+		case "EQUAL":
+			return boolExpr(equalExpr(carOf(x), carOf(cdrOf(x))))
+		case "NOT":
+			return boolExpr(!isTrue(carOf(x)))
+		case "AND":
+			return applyAnd(x)
+		case "OR":
+			return applyOr(x)
 
-			switch fn.atom {
-			case "EQUAL":
-				return boolExpr(equalExpr(carOf(x), carOf(cdrOf(x))))
-			case "NOT":
-				return boolExpr(!isTrue(carOf(x)))
-			case "AND":
-				return applyAnd(x)
-			case "OR":
-				return applyOr(x)
-
-			case "PLUS":
-				return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Add(a, b) })
-			case "TIMES":
-				return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Mul(a, b) })
-			case "DIFFERENCE":
-				return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Sub(a, b) })
-			case "QUOTIENT":
-				return arith2(x, func(a, b *big.Int) *big.Int {
-					if b.Sign() == 0 {
-						panic("QUOTIENT: division by zero")
-					}
-					return new(big.Int).Quo(a, b)
-				})
-			case "REMAINDER":
-				return arith2(x, func(a, b *big.Int) *big.Int {
-					if b.Sign() == 0 {
-						panic("REMAINDER: division by zero")
-					}
-					return new(big.Int).Rem(a, b)
-				})
-			case "ADD1":
-				return mkNum(new(big.Int).Add(mustNum(carOf(x)), big.NewInt(1)))
-			case "SUB1":
-				return mkNum(new(big.Int).Sub(mustNum(carOf(x)), big.NewInt(1)))
-
-			case "GREATERP":
-				return boolExpr(mustNum(carOf(x)).Cmp(mustNum(carOf(cdrOf(x)))) > 0)
-			case "LESSP":
-				return boolExpr(mustNum(carOf(x)).Cmp(mustNum(carOf(cdrOf(x)))) < 0)
-			case "ZEROP":
-				return boolExpr(mustNum(carOf(x)).Sign() == 0)
-			case "MINUSP":
-				return boolExpr(mustNum(carOf(x)).Sign() < 0)
-			case "NUMBERP":
-				v := carOf(x)
-				return boolExpr(v != nil && v.num != nil)
-
-			case "LIST":
-				return x // args are already evaluated into a list
-			case "APPEND":
-				return appendExpr(carOf(x), carOf(cdrOf(x)))
-			case "REVERSE":
-				return reverseExpr(carOf(x), nil)
-			case "LENGTH":
-				return mkInt(int64(lengthOf(carOf(x))))
-			case "MEMBER":
-				return boolExpr(memberExpr(carOf(x), carOf(cdrOf(x))))
-			case "ASSOC":
-				p := assocLookup(carOf(x), carOf(cdrOf(x)))
-				if p == nil {
-					return nil
+		// ── Arithmetic ──────────────────────────────────────────────────
+		case "PLUS":
+			return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Add(a, b) })
+		case "TIMES":
+			return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Mul(a, b) })
+		case "DIFFERENCE":
+			return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Sub(a, b) })
+		case "QUOTIENT":
+			return arith2(x, func(a, b *big.Int) *big.Int {
+				if b.Sign() == 0 {
+					panic("QUOTIENT: division by zero")
 				}
-				return p
-			case "PAIR":
-				return pairExpr(carOf(x), carOf(cdrOf(x)))
-			case "PAIRLIS":
-				return pairlisExpr(carOf(x), carOf(cdrOf(x)), carOf(cdrOf(cdrOf(x))))
+				return new(big.Int).Quo(a, b)
+			})
+		case "REMAINDER":
+			return arith2(x, func(a, b *big.Int) *big.Int {
+				if b.Sign() == 0 {
+					panic("REMAINDER: division by zero")
+				}
+				return new(big.Int).Rem(a, b)
+			})
+		case "ADD1":
+			return mkNum(new(big.Int).Add(mustNum(carOf(x)), big.NewInt(1)))
+		case "SUB1":
+			return mkNum(new(big.Int).Sub(mustNum(carOf(x)), big.NewInt(1)))
 
-			case "MAPCAR":
-				return mapcarExpr(carOf(x), carOf(cdrOf(x)), a)
-			case "APPLY":
-				return apply(carOf(x), carOf(cdrOf(x)), a)
-			case "PRINT":
-				fmt.Printf(" %s\n", exprStr(carOf(x)))
-				return carOf(x)
+		// ── Numeric predicates ──────────────────────────────────────────
+		case "GREATERP":
+			return boolExpr(mustNum(carOf(x)).Cmp(mustNum(carOf(cdrOf(x)))) > 0)
+		case "LESSP":
+			return boolExpr(mustNum(carOf(x)).Cmp(mustNum(carOf(cdrOf(x)))) < 0)
+		case "ZEROP":
+			return boolExpr(mustNum(carOf(x)).Sign() == 0)
+		case "MINUSP":
+			return boolExpr(mustNum(carOf(x)).Sign() < 0)
+		case "NUMBERP":
+			v := carOf(x)
+			return boolExpr(v != nil && v.num != nil)
+
+		// ── List operations ─────────────────────────────────────────────
+		case "LIST":
+			return x
+		case "APPEND":
+			return appendExpr(carOf(x), carOf(cdrOf(x)))
+		case "REVERSE":
+			return reverseExpr(carOf(x), nil)
+		case "LENGTH":
+			return mkInt(int64(lengthOf(carOf(x))))
+		case "MEMBER":
+			return boolExpr(memberExpr(carOf(x), carOf(cdrOf(x))))
+		case "ASSOC":
+			return assocLookup(carOf(x), carOf(cdrOf(x)))
+		case "PAIR":
+			return pairExpr(carOf(x), carOf(cdrOf(x)))
+		case "PAIRLIS":
+			return pairlisExpr(carOf(x), carOf(cdrOf(x)), carOf(cdrOf(cdrOf(x))))
+		case "MAPCAR":
+			return mapcarExpr(carOf(x), carOf(cdrOf(x)), a)
+
+		// ── Meta / I/O ──────────────────────────────────────────────────
+		case "APPLY":
+			return apply(carOf(x), carOf(cdrOf(x)), a)
+		case "PRINT":
+			fmt.Printf(" %s\n", exprStr(carOf(x)))
+			return carOf(x)
+
+		// ── Global definition ───────────────────────────────────────────
+		case "DEFINE":
+			return doDefine(x)
+
+		// ── QUOTE in EVALQUOTE context: returns its first argument ───────
+		case "QUOTE":
+			return carOf(x)
+
+		// ── LABEL in EVALQUOTE context: ((name fn) args) ─────────────────
+		// e.g. LABEL ((FAC (LAMBDA (N) ...)) (6))
+		case "LABEL":
+			nameFn := carOf(x)
+			name := carOf(nameFn)
+			fn := carOf(cdrOf(nameFn))
+			actualArgs := carOf(cdrOf(x))
+			newA := mkCons(mkCons(name, fn), a)
+			return apply(fn, actualArgs, newA)
+
+		default:
+			// Not a built-in: look up in a-list then global definitions.
+			pair := assocLookup(fn, a)
+			if pair != nil {
+				return apply(cdrOf(pair), x, a)
 			}
+			if def, ok := definitions[fn.atom]; ok {
+				return apply(def, x, a)
+			}
+			panic("undefined function: " + fn.atom)
 		}
-
-		// Not a built-in: look up in a-list then global definitions.
-		pair := assocLookup(fn, a)
-		if pair != nil {
-			return apply(cdrOf(pair), x, a)
-		}
-		if def, ok := definitions[fn.atom]; ok {
-			return apply(def, x, a)
-		}
-		panic("undefined function: " + fn.atom)
 	}
 
 	// fn is a list: must be a LAMBDA or LABEL expression.
@@ -155,18 +153,15 @@ func apply(fn, x, a *Expr) *Expr {
 	if head != nil && head.atom != "" {
 		switch head.atom {
 		case "LAMBDA":
-			// (LAMBDA (params...) body)
 			params := carOf(cdrOf(fn))
 			body := carOf(cdrOf(cdrOf(fn)))
-			newA := pairlisExpr(params, x, a)
-			return eval(body, newA)
+			return eval(body, pairlisExpr(params, x, a))
 
 		case "LABEL":
-			// (LABEL name lambda) — self-referential recursion helper
+			// (LABEL name lambda)
 			name := carOf(cdrOf(fn))
 			lambda := carOf(cdrOf(cdrOf(fn)))
-			newA := mkCons(mkCons(name, lambda), a)
-			return apply(lambda, x, newA)
+			return apply(lambda, x, mkCons(mkCons(name, lambda), a))
 		}
 	}
 
@@ -187,11 +182,9 @@ func eval(e, a *Expr) *Expr {
 		}
 		switch e.atom {
 		case "T":
-			return exprT
+			return exprT // T is the logical-true constant
 		case "F":
-			return exprF
-		case "NIL":
-			return nil
+			return nil // F = NIL in this implementation
 		case "*TRUE*":
 			return exprTrue
 		}
