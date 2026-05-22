@@ -426,6 +426,28 @@ func eval(e, a *Expr) *Expr {
 			return evcon(cdrOf(e), a)
 		case "LAMBDA", "LABEL", "FEXPR":
 			return e // these evaluate to themselves
+		case "COMMENT", "IGNORE":
+			return nil // documentation forms — evaluate to NIL
+		case "PROG2":
+			// (PROG2 e1 e2) — eval both, return second
+			eval(carOf(cdrOf(e)), a)
+			return eval(carOf(cdrOf(cdrOf(e))), a)
+		case "AND":
+			// Short-circuit AND: evaluate args left-to-right
+			for args := cdrOf(e); args != nil; args = cdrOf(args) {
+				if !isTrue(eval(carOf(args), a)) {
+					return nil
+				}
+			}
+			return exprTrue
+		case "OR":
+			// Short-circuit OR: evaluate args left-to-right
+			for args := cdrOf(e); args != nil; args = cdrOf(args) {
+				if v := eval(carOf(args), a); isTrue(v) {
+					return exprTrue
+				}
+			}
+			return nil
 		case "FUNCTION":
 			// (FUNCTION lambda) — capture current a-list for dynamic-to-lexical bridge
 			return mkCons(mkSym("FUNARG"), mkCons(carOf(cdrOf(e)), mkCons(a, nil)))

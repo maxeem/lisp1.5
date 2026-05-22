@@ -22,7 +22,6 @@ type Expr struct {
 
 var (
 	exprT    = &Expr{atom: "T"}
-	exprF    = &Expr{atom: "F"}
 	exprTrue = &Expr{atom: "*TRUE*"}
 )
 
@@ -56,15 +55,9 @@ func isNull(e *Expr) bool {
 	return e == nil
 }
 
-// isTrue reports whether e is a true value (not NIL, not F).
+// isTrue reports whether e is a true value (only NIL is false in LISP 1.5).
 func isTrue(e *Expr) bool {
-	if e == nil {
-		return false
-	}
-	if e.atom == "F" {
-		return false
-	}
-	return true
+	return e != nil
 }
 
 // boolExpr converts a Go bool to *TRUE* or NIL, matching the IBM 7094 emulator.
