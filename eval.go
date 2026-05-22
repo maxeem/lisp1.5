@@ -8,6 +8,58 @@ import (
 // definitions holds globally DEFINE'd functions (simulating the LISP 1.5 oblist).
 var definitions = make(map[string]*Expr)
 
+// ── PROG state ────────────────────────────────────────────────────────────────
+
+// progFrame holds the mutable local variables of one active PROG invocation.
+type progFrame struct {
+	vars map[string]*Expr
+	prev *progFrame
+}
+
+// progStack is the stack of active PROG frames (innermost first).
+var progStack *progFrame
+
+// progReturn / progGo are used to signal RETURN and GO out of nested eval calls.
+type progReturn struct{ val *Expr }
+type progGo struct{ label string }
+
+func pushProgFrame(vars *Expr) {
+	f := &progFrame{vars: make(map[string]*Expr), prev: progStack}
+	for v := vars; v != nil; v = cdrOf(v) {
+		if n := carOf(v); n != nil {
+			f.vars[n.atom] = nil
+		}
+	}
+	progStack = f
+}
+
+func popProgFrame() {
+	if progStack != nil {
+		progStack = progStack.prev
+	}
+}
+
+// setqInProg tries to update a PROG-local variable. Returns true if found.
+func setqInProg(name string, val *Expr) bool {
+	for f := progStack; f != nil; f = f.prev {
+		if _, ok := f.vars[name]; ok {
+			f.vars[name] = val
+			return true
+		}
+	}
+	return false
+}
+
+// lookupInProg returns the value of a PROG-local variable, or (nil, false).
+func lookupInProg(name string) (*Expr, bool) {
+	for f := progStack; f != nil; f = f.prev {
+		if val, ok := f.vars[name]; ok {
+			return val, true
+		}
+	}
+	return nil, false
+}
+
 // evalquote is the top-level entry point: evalquote[fn; x] = apply[fn; x; NIL]
 func evalquote(fn, x *Expr) *Expr {
 	return apply(fn, x, nil)
@@ -193,6 +245,10 @@ func eval(e, a *Expr) *Expr {
 		if pair != nil {
 			return cdrOf(pair)
 		}
+		// Search active PROG frames (for mutable SETQ variables).
+		if val, ok := lookupInProg(e.atom); ok {
+			return val
+		}
 		// Search global definitions.
 		if def, ok := definitions[e.atom]; ok {
 			return def
@@ -212,8 +268,34 @@ func eval(e, a *Expr) *Expr {
 		case "LAMBDA", "LABEL":
 			return e // these evaluate to themselves
 		case "DEFINE":
-			// Rare: DEFINE used as an inner expression.
 			return doDefine(evlis(cdrOf(e), a))
+		case "PROG":
+			return evalProg(cdrOf(e), a)
+		case "RETURN":
+			panic(progReturn{eval(carOf(cdrOf(e)), a)})
+		case "GO":
+			lbl := carOf(cdrOf(e))
+			if lbl == nil || lbl.atom == "" {
+				panic("GO: expected label atom")
+			}
+			panic(progGo{lbl.atom})
+		case "SETQ":
+			vname := carOf(cdrOf(e))
+			val := eval(carOf(cdrOf(cdrOf(e))), a)
+			if !setqInProg(vname.atom, val) {
+				definitions[vname.atom] = val
+			}
+			return val
+		case "SET":
+			vname := eval(carOf(cdrOf(e)), a)
+			val := eval(carOf(cdrOf(cdrOf(e))), a)
+			if vname == nil || vname.atom == "" {
+				panic("SET: first arg must evaluate to an atom")
+			}
+			if !setqInProg(vname.atom, val) {
+				definitions[vname.atom] = val
+			}
+			return val
 		default:
 			// atom[car[e]] ∧ not a special form → apply[car[e]; evlis[cdr[e]; a]; a]
 			return apply(head, evlis(cdrOf(e), a), a)
@@ -261,6 +343,109 @@ func doDefine(x *Expr) *Expr {
 		defList = cdrOf(defList)
 	}
 	return exprTrue
+}
+
+// ── PROG ─────────────────────────────────────────────────────────────────────
+
+// evalProg executes a PROG form: args = ((vars...) stmt1 stmt2 ...)
+func evalProg(args, a *Expr) *Expr {
+	vars := carOf(args)
+	body := cdrOf(args)
+
+	pushProgFrame(vars)
+	defer popProgFrame()
+
+	cur := body
+	for cur != nil {
+		stmt := carOf(cur)
+		cur = cdrOf(cur)
+
+		if isAtom(stmt) && stmt != nil {
+			continue // atom label — skip, used as GO target
+		}
+
+		head := carOf(stmt)
+		if head == nil {
+			continue
+		}
+
+		switch head.atom {
+		case "RETURN":
+			return eval(carOf(cdrOf(stmt)), a)
+		case "GO":
+			lbl := carOf(cdrOf(stmt))
+			if lbl == nil || lbl.atom == "" {
+				panic("GO: expected label atom")
+			}
+			next := findProgLabel(lbl.atom, body)
+			if next == nil {
+				panic("GO: label not found: " + lbl.atom)
+			}
+			cur = next
+		case "SETQ":
+			vname := carOf(cdrOf(stmt))
+			val := eval(carOf(cdrOf(cdrOf(stmt))), a)
+			if !setqInProg(vname.atom, val) {
+				definitions[vname.atom] = val
+			}
+		case "SET":
+			vname := eval(carOf(cdrOf(stmt)), a)
+			val := eval(carOf(cdrOf(cdrOf(stmt))), a)
+			if vname == nil || vname.atom == "" {
+				panic("SET: first arg must be an atom")
+			}
+			if !setqInProg(vname.atom, val) {
+				definitions[vname.atom] = val
+			}
+		default:
+			// General expression — evaluate for side effects.
+			// Catch RETURN/GO panics from nested eval (e.g. inside COND).
+			var goLabel string
+			var returnVal *Expr
+			returned := false
+
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						switch v := r.(type) {
+						case progReturn:
+							returnVal = v.val
+							returned = true
+						case progGo:
+							goLabel = v.label
+						default:
+							panic(r)
+						}
+					}
+				}()
+				eval(stmt, a)
+			}()
+
+			if returned {
+				return returnVal
+			}
+			if goLabel != "" {
+				next := findProgLabel(goLabel, body)
+				if next == nil {
+					panic("GO: label not found: " + goLabel)
+				}
+				cur = next
+			}
+		}
+	}
+	return nil // PROG falls off end → NIL
+}
+
+// findProgLabel returns the statements starting AFTER the given label atom.
+func findProgLabel(label string, stmts *Expr) *Expr {
+	for stmts != nil {
+		s := carOf(stmts)
+		if isAtom(s) && s != nil && s.atom == label {
+			return cdrOf(stmts)
+		}
+		stmts = cdrOf(stmts)
+	}
+	return nil
 }
 
 // ── A-list helpers ────────────────────────────────────────────────────────────
