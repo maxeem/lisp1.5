@@ -57,44 +57,51 @@ func main() {
 			break
 		}
 
-		t := p.next()
+		t := p.peek()
 		if t.typ == tokEOF {
 			break
 		}
 
 		// Skip stray closing parens (e.g. the `)))` after STOP).
 		if t.typ == tokRpar {
+			p.next()
 			continue
 		}
 
-		if t.typ != tokAtom {
-			continue
+		// S1 can be either an atom (function name) or a list (lambda expression).
+		var fn *Expr
+		var fnStr string
+		if t.typ == tokAtom {
+			p.next()
+			fnStr = t.text
+			if fnStr == "STOP" || fnStr == "FIN" {
+				fmt.Println()
+				fmt.Println(" END OF EVALQUOTE OPERATOR")
+				fmt.Printf("             FIN      END OF LISP RUN\n")
+				return
+			}
+			// Tokens like END, OF, LISP, RUN appear after STOP — ignore them.
+			switch fnStr {
+			case "END", "OF", "LISP", "RUN":
+				continue
+			}
+			fn = mkSym(fnStr)
+		} else {
+			// S1 is a list expression (e.g. a LAMBDA).
+			fn = p.parseExpr()
+			fnStr = exprStr(fn)
 		}
 
-		fnName := t.text
-
-		if fnName == "STOP" || fnName == "FIN" {
-			fmt.Println()
-			fmt.Println(" END OF EVALQUOTE OPERATOR")
-			fmt.Printf("             FIN      END OF LISP RUN\n")
-			return
-		}
-
-		// Tokens like END, OF, LISP, RUN appear after STOP — ignore them.
-		switch fnName {
-		case "END", "OF", "LISP", "RUN":
-			continue
-		}
-
-		// Read the argument list (an S-expression).
+		// Read S2: the argument list.
 		args := p.parseExpr()
 
 		fmt.Printf("  FUNCTION   EVALQUOTE   HAS BEEN ENTERED, ARGUMENTS..\n")
-		fmt.Printf(" %s\n\n", fnName)
+		printWrapped(fnStr, 72)
+		fmt.Println()
 		printWrapped(exprStr(args), 72)
 		fmt.Println()
 
-		result, evalErr := safeEval(mkSym(fnName), args)
+		result, evalErr := safeEval(fn, args)
 
 		fmt.Println(" END OF EVALQUOTE, VALUE IS ..")
 		if evalErr != "" {

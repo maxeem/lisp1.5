@@ -243,11 +243,17 @@ func apply(fn, x, a *Expr) *Expr {
 		case "PAIRLIS":
 			return pairlisExpr(carOf(x), carOf(cdrOf(x)), carOf(cdrOf(cdrOf(x))))
 		case "MAPCAR":
-			return mapcarExpr(carOf(x), carOf(cdrOf(x)), a)
+			// (MAPCAR x fn) — x first, fn second
+			return mapcarExpr(carOf(cdrOf(x)), carOf(x), a)
 		case "MAPLIST":
-			return maplistExpr(carOf(x), carOf(cdrOf(x)), a)
+			// (MAPLIST x fn) — x first, fn second
+			return maplistExpr(carOf(cdrOf(x)), carOf(x), a)
+		case "MAP":
+			// (MAP x fn) — x first, fn second
+			return mapExpr(carOf(cdrOf(x)), carOf(x), a)
 		case "MAPC":
-			return mapcExpr(carOf(x), carOf(cdrOf(x)), a)
+			// (MAPC x fn) — x first, fn second
+			return mapcExpr(carOf(cdrOf(x)), carOf(x), a)
 		case "SEARCH":
 			// (SEARCH x p f u) — search list x for element satisfying p;
 			// apply f to it if found, apply u to no args if not found.
@@ -895,6 +901,15 @@ func maplistExpr(fn, lst, a *Expr) *Expr {
 	}
 	result := apply(fn, mkCons(lst, nil), a)
 	return mkCons(result, maplistExpr(fn, cdrOf(lst), a))
+}
+
+// mapExpr applies fn to lst and successive CDR segments until atom; returns terminal atom.
+func mapExpr(fn, lst, a *Expr) *Expr {
+	for !isAtom(lst) {
+		apply(fn, mkCons(lst, nil), a)
+		lst = cdrOf(lst)
+	}
+	return lst
 }
 
 func mapcExpr(fn, lst, a *Expr) *Expr {
