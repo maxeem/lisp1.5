@@ -9,6 +9,9 @@ import (
 // definitions holds globally DEFINE'd functions (simulating the LISP 1.5 oblist).
 var definitions = make(map[string]*Expr)
 
+// macros holds MACRO-defined expanders; called with the whole form, result is re-evaluated.
+var macros = make(map[string]*Expr)
+
 var gensymCounter int
 
 // ── PROG state ────────────────────────────────────────────────────────────────
@@ -197,10 +200,28 @@ func apply(fn, x, a *Expr) *Expr {
 			}
 			return mkNum(new(big.Int).Exp(base2, exp2, nil))
 
+		// ── Destructive list modification ───────────────────────────────
+		case "RPLACA":
+			arg := carOf(x)
+			if arg == nil || arg.atom != "" {
+				panic("RPLACA: first argument must be a cons cell")
+			}
+			arg.car = carOf(cdrOf(x))
+			return arg
+		case "RPLACD":
+			arg := carOf(x)
+			if arg == nil || arg.atom != "" {
+				panic("RPLACD: first argument must be a cons cell")
+			}
+			arg.cdr = carOf(cdrOf(x))
+			return arg
+		case "NCONC":
+			return nconcExpr(carOf(x), carOf(cdrOf(x)))
+
 		// ── List operations ─────────────────────────────────────────────
 		case "LIST":
 			return x
-		case "APPEND", "NCONC":
+		case "APPEND":
 			return appendExpr(carOf(x), carOf(cdrOf(x)))
 		case "REVERSE":
 			return reverseExpr(carOf(x), nil)
@@ -343,6 +364,8 @@ func apply(fn, x, a *Expr) *Expr {
 		// ── Global definition ───────────────────────────────────────────
 		case "DEFINE":
 			return doDefine(x)
+		case "MACRO":
+			return doMacro(x)
 
 		// ── QUOTE in EVALQUOTE context: returns its first argument ───────
 		case "QUOTE":
@@ -495,6 +518,8 @@ func eval(e, a *Expr) *Expr {
 			return mkCons(mkSym("FUNARG"), mkCons(carOf(cdrOf(e)), mkCons(a, nil)))
 		case "DEFINE":
 			return doDefine(evlis(cdrOf(e), a))
+		case "MACRO":
+			return doMacro(evlis(cdrOf(e), a))
 		case "PROG":
 			return evalProg(cdrOf(e), a)
 		case "RETURN":
@@ -530,6 +555,11 @@ func eval(e, a *Expr) *Expr {
 			// (ERROR ...) — collect unevaluated args as error message
 			panic(fmt.Sprintf("ERROR: %s", exprStr(cdrOf(e))))
 		default:
+			// Check if it's a MACRO — receive whole form, re-eval result.
+			if macroFn, ok := macros[head.atom]; ok {
+				expanded := apply(macroFn, mkCons(e, nil), a)
+				return eval(expanded, a)
+			}
 			// Check if the function is an FEXPR — skip evlis if so
 			fnDef := lookupFn(head.atom, a)
 			if fnDef != nil && carOf(fnDef) != nil && carOf(fnDef).atom == "FEXPR" {
@@ -578,6 +608,22 @@ func doDefine(x *Expr) *Expr {
 			panic("DEFINE: invalid function name")
 		}
 		definitions[name.atom] = body
+		defList = cdrOf(defList)
+	}
+	return exprTrue
+}
+
+// doMacro processes: x = (((name1 lambda1) ...)) — stores in macros map.
+func doMacro(x *Expr) *Expr {
+	defList := carOf(x)
+	for defList != nil {
+		def := carOf(defList)
+		name := carOf(def)
+		body := carOf(cdrOf(def))
+		if name == nil || name.atom == "" {
+			panic("MACRO: invalid macro name")
+		}
+		macros[name.atom] = body
 		defList = cdrOf(defList)
 	}
 	return exprTrue
@@ -796,6 +842,19 @@ func applyOr(x *Expr) *Expr {
 }
 
 // ── List operations ───────────────────────────────────────────────────────────
+
+// nconcExpr destructively appends y to x by modifying the last CDR of x.
+func nconcExpr(x, y *Expr) *Expr {
+	if x == nil {
+		return y
+	}
+	cur := x
+	for cur.cdr != nil && cur.cdr.atom == "" {
+		cur = cur.cdr
+	}
+	cur.cdr = y
+	return x
+}
 
 func appendExpr(a, b *Expr) *Expr {
 	if a == nil {
