@@ -149,6 +149,10 @@ func apply(fn, x, a *Expr) *Expr {
 			return boolExpr(mustNum(carOf(x)).Cmp(mustNum(carOf(cdrOf(x)))) < 0)
 		case "ZEROP":
 			return boolExpr(mustNum(carOf(x)).Sign() == 0)
+		case "ONEP":
+			return boolExpr(mustNum(carOf(x)).Cmp(big.NewInt(1)) == 0)
+		case "EVENP":
+			return boolExpr(new(big.Int).Rem(mustNum(carOf(x)), big.NewInt(2)).Sign() == 0)
 		case "MINUSP":
 			return boolExpr(mustNum(carOf(x)).Sign() < 0)
 		case "NUMBERP", "FIXP":
@@ -170,8 +174,21 @@ func apply(fn, x, a *Expr) *Expr {
 				return mkNum(new(big.Int).Set(a2))
 			}
 			return mkNum(new(big.Int).Set(b2))
-		case "ABS":
+		case "ABS", "ABSVAL":
 			return mkNum(new(big.Int).Abs(mustNum(carOf(x))))
+		case "ENTIER":
+			// ENTIER(x) = floor for floats; since we have only integers, identity.
+			return carOf(x)
+		case "DIVIDE":
+			// (DIVIDE x y) → (QUOTIENT x y) as a list
+			a2 := mustNum(carOf(x))
+			b2 := mustNum(carOf(cdrOf(x)))
+			if b2.Sign() == 0 {
+				panic("DIVIDE: division by zero")
+			}
+			q := new(big.Int).Quo(a2, b2)
+			r := new(big.Int).Rem(a2, b2)
+			return mkCons(mkNum(q), mkCons(mkNum(r), nil))
 		case "EXPT":
 			base2 := mustNum(carOf(x))
 			exp2 := mustNum(carOf(cdrOf(x)))
@@ -195,6 +212,15 @@ func apply(fn, x, a *Expr) *Expr {
 			return boolExpr(memberExpr(carOf(x), carOf(cdrOf(x))))
 		case "EFFACE":
 			return effaceExpr(carOf(x), carOf(cdrOf(x)))
+		case "DELETE":
+			// (DELETE a l) — remove all top-level occurrences of a from l
+			return deleteExpr(carOf(x), carOf(cdrOf(x)))
+		case "INTERSECTION":
+			// (INTERSECTION x y) — elements common to both lists
+			return intersectionExpr(carOf(x), carOf(cdrOf(x)))
+		case "UNION":
+			// (UNION x y) — elements in x or y (no duplicates)
+			return unionExpr(carOf(x), carOf(cdrOf(x)))
 		case "ASSOC":
 			return assocLookup(carOf(x), carOf(cdrOf(x)))
 		case "SASSOC":
@@ -413,10 +439,9 @@ func eval(e, a *Expr) *Expr {
 			return cdrOf(pair)
 		}
 		// Self-evaluating truth constants (checked after a-list so they can be shadowed).
+		// In IBM 7094 LISP 1.5, T and *TRUE* are the same truth value.
 		switch e.atom {
-		case "T":
-			return exprT
-		case "*TRUE*":
+		case "T", "*TRUE*":
 			return exprTrue
 		}
 		// Search global definitions.
@@ -491,6 +516,10 @@ func eval(e, a *Expr) *Expr {
 				definitions[vname.atom] = val
 			}
 			return val
+		case "SELECT":
+			// (SELECT p (p1 e1) (p2 e2) ... (pn en) e)
+			// Evaluate p, then find first pi equal to p; return ei. Else return e.
+			return evalSelect(cdrOf(e), a)
 		case "ERROR":
 			// (ERROR ...) — collect unevaluated args as error message
 			panic(fmt.Sprintf("ERROR: %s", exprStr(cdrOf(e))))
@@ -1022,4 +1051,66 @@ func applyCxR(name string, e *Expr) *Expr {
 		}
 	}
 	return e
+}
+
+// deleteExpr removes all top-level occurrences of x from list lst.
+func deleteExpr(x, lst *Expr) *Expr {
+	if lst == nil {
+		return nil
+	}
+	rest := deleteExpr(x, cdrOf(lst))
+	if equalExpr(x, carOf(lst)) {
+		return rest
+	}
+	return mkCons(carOf(lst), rest)
+}
+
+// intersectionExpr returns elements common to both lists.
+func intersectionExpr(x, y *Expr) *Expr {
+	if x == nil {
+		return nil
+	}
+	rest := intersectionExpr(cdrOf(x), y)
+	if memberExpr(carOf(x), y) {
+		return mkCons(carOf(x), rest)
+	}
+	return rest
+}
+
+// unionExpr returns elements in x or y without duplicates.
+// All of y first, then elements of x not already in y.
+func unionExpr(x, y *Expr) *Expr {
+	if x == nil {
+		return y
+	}
+	if memberExpr(carOf(x), y) {
+		return unionExpr(cdrOf(x), y)
+	}
+	return mkCons(carOf(x), unionExpr(cdrOf(x), y))
+}
+
+// evalSelect implements (SELECT p (p1 e1) (p2 e2) ... (pn en) default).
+// args = (p (p1 e1) (p2 e2) ... default)
+func evalSelect(args, a *Expr) *Expr {
+	if args == nil {
+		return nil
+	}
+	p := eval(carOf(args), a)
+	clauses := cdrOf(args)
+	// Walk clauses; last single element is the default.
+	for clauses != nil {
+		clause := carOf(clauses)
+		// If clause is a list (pi ei), compare p to pi.
+		if clause != nil && clause.atom == "" {
+			pi := eval(carOf(clause), a)
+			if equalExpr(p, pi) {
+				return eval(carOf(cdrOf(clause)), a)
+			}
+		} else {
+			// Bare expression — this is the default value.
+			return eval(clause, a)
+		}
+		clauses = cdrOf(clauses)
+	}
+	return nil
 }

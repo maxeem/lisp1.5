@@ -21,7 +21,6 @@ type Expr struct {
 }
 
 var (
-	exprT    = &Expr{atom: "T"}
 	exprTrue = &Expr{atom: "*TRUE*"}
 )
 
