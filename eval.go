@@ -297,6 +297,17 @@ func apply(fn, x, a *Expr) *Expr {
 		case "OBLIST":
 			return oblistExpr()
 
+		// ── Error trapping ───────────────────────────────────────────────
+		case "ERRORSET":
+			// (ERRORSET expr flag) — evaluate expr, catch errors
+			// Returns (result) on success or NIL on error.
+			return errorsetExpr(carOf(x), a)
+
+		// ── Type predicates ──────────────────────────────────────────────
+		case "LISTP":
+			v := carOf(x)
+			return boolExpr(v != nil && v.atom == "")
+
 		// ── Global definition ───────────────────────────────────────────
 		case "DEFINE":
 			return doDefine(x)
@@ -873,6 +884,18 @@ func searchExpr(lst, pred, found, notFound, a *Expr) *Expr {
 		lst = cdrOf(lst)
 	}
 	return apply(notFound, nil, a)
+}
+
+// ── Error trapping ────────────────────────────────────────────────────────────
+
+func errorsetExpr(expr, a *Expr) (result *Expr) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = nil // NIL on error
+		}
+	}()
+	val := eval(expr, a)
+	return mkCons(val, nil) // (val) on success
 }
 
 // ── Atom / character conversion ───────────────────────────────────────────────
