@@ -39,15 +39,23 @@ func popProgFrame() {
 	}
 }
 
-// setqInProg tries to update a PROG-local variable. Returns true if found.
+// setqInProg stores val in the PROG frame where name is already bound,
+// or in the innermost frame if no frame has it yet.
+// Returns false (no active PROG) if progStack is nil.
 func setqInProg(name string, val *Expr) bool {
+	if progStack == nil {
+		return false
+	}
+	// Update in the frame that already owns this name.
 	for f := progStack; f != nil; f = f.prev {
 		if _, ok := f.vars[name]; ok {
 			f.vars[name] = val
 			return true
 		}
 	}
-	return false
+	// Not declared in any frame — store in innermost (handles lambda params).
+	progStack.vars[name] = val
+	return true
 }
 
 // lookupInProg returns the value of a PROG-local variable, or (nil, false).
@@ -240,14 +248,14 @@ func eval(e, a *Expr) *Expr {
 		case "*TRUE*":
 			return exprTrue
 		}
-		// Search local a-list.
+		// PROG frames take priority over the a-list so SETQ can shadow lambda params.
+		if val, ok := lookupInProg(e.atom); ok {
+			return val
+		}
+		// Search local a-list (lambda params and outer bindings).
 		pair := assocLookup(e, a)
 		if pair != nil {
 			return cdrOf(pair)
-		}
-		// Search active PROG frames (for mutable SETQ variables).
-		if val, ok := lookupInProg(e.atom); ok {
-			return val
 		}
 		// Search global definitions.
 		if def, ok := definitions[e.atom]; ok {

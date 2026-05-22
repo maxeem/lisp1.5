@@ -29,9 +29,18 @@ func main() {
 	}
 
 	// Collect the rest of the file for the tokenizer.
+	// Warn if any line exceeds 72 columns — the IBM 7094 reader silently
+	// truncates longer lines, which causes parse errors in the emulator.
 	var sb strings.Builder
+	lineNum := 1
 	for scanner.Scan() {
-		sb.WriteString(scanner.Text())
+		lineNum++
+		line := scanner.Text()
+		if len(line) > 72 {
+			fmt.Fprintf(os.Stderr, "warning: line %d is %d chars (>72); IBM 7094 emulator will truncate\n",
+				lineNum, len(line))
+		}
+		sb.WriteString(line)
 		sb.WriteByte('\n')
 	}
 
