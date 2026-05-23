@@ -285,8 +285,12 @@ func apply(fn, x, a *Expr) *Expr {
 			// (PUTPROP atom value indicator)
 			return doPutProp(carOf(x), carOf(cdrOf(x)), carOf(cdrOf(cdrOf(x))))
 		case "GET":
-			// (GET atom indicator)
-			return doGet(carOf(x), carOf(cdrOf(x)))
+			// (GET atom indicator) — PNAME indicator returns the atom's print name as a char list
+			atom, ind := carOf(x), carOf(cdrOf(x))
+			if ind != nil && ind.atom == "PNAME" {
+				return explodeExpr(atom)
+			}
+			return doGet(atom, ind)
 		case "REMPROP":
 			// (REMPROP atom indicator)
 			return doRemProp(carOf(x), carOf(cdrOf(x)))
@@ -295,11 +299,37 @@ func apply(fn, x, a *Expr) *Expr {
 			return doDefList(carOf(x), carOf(cdrOf(x)))
 		case "PROP":
 			// (PROP atom indicator u) — GET with not-found function
-			result := doGet(carOf(x), carOf(cdrOf(x)))
+			atom2, ind2 := carOf(x), carOf(cdrOf(x))
+			var result *Expr
+			if ind2 != nil && ind2.atom == "PNAME" {
+				result = explodeExpr(atom2)
+			} else {
+				result = doGet(atom2, ind2)
+			}
 			if result != nil {
 				return result
 			}
 			return apply(carOf(cdrOf(cdrOf(x))), nil, a)
+		case "ATTRIB":
+			// (ATTRIB atom (indicator . value)) — add property via dotted pair; returns the pair
+			// In LISP 1.5 this destructively appends to the property list.
+			// We map it to PUTPROP since our property lists are map-based.
+			pair := carOf(cdrOf(x))
+			doPutProp(carOf(x), cdrOf(pair), carOf(pair))
+			return pair
+		case "REMOB":
+			// (REMOB atom) — remove atom from the object list (global definitions)
+			name := carOf(x)
+			if name != nil && name.atom != "" {
+				delete(definitions, name.atom)
+			}
+			return name
+		case "RECLAIM":
+			// (RECLAIM flag) — trigger garbage collection; no-op in our implementation
+			return nil
+		case "TEMPUS-FUGIT":
+			// Returns NIL; in the IBM 7094 emulator this printed timing information
+			return nil
 
 		// ── Meta / I/O ──────────────────────────────────────────────────
 		case "APPLY":
@@ -343,7 +373,7 @@ func apply(fn, x, a *Expr) *Expr {
 		// ── Atom ↔ character-list conversion ────────────────────────────
 		case "EXPLODE":
 			return explodeExpr(carOf(x))
-		case "INTERN":
+		case "INTERN", "IMPLODE", "COMPRESS":
 			return internExpr(carOf(x))
 
 		// ── Oblist ───────────────────────────────────────────────────────
