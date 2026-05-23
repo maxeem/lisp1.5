@@ -315,7 +315,7 @@ func apply(fn, x, a *Expr) *Expr {
 			return nil
 		case "GENSYM":
 			gensymCounter++
-			return mkSym(fmt.Sprintf("G%04d", gensymCounter))
+			return mkSym(fmt.Sprintf("G%05d", gensymCounter))
 
 		// ── Unary arithmetic ─────────────────────────────────────────────
 		case "MINUS":
@@ -323,11 +323,11 @@ func apply(fn, x, a *Expr) *Expr {
 
 		// ── Bitwise (operate on integer values) ──────────────────────────
 		case "LOGOR":
-			return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Or(a, b) })
+			return mkOctal(new(big.Int).Or(mustNum(carOf(x)), mustNum(carOf(cdrOf(x)))))
 		case "LOGAND":
-			return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).And(a, b) })
+			return mkOctal(new(big.Int).And(mustNum(carOf(x)), mustNum(carOf(cdrOf(x)))))
 		case "LOGXOR":
-			return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Xor(a, b) })
+			return mkOctal(new(big.Int).Xor(mustNum(carOf(x)), mustNum(carOf(cdrOf(x)))))
 		case "LEFTSHIFT":
 			// (LEFTSHIFT n count) — positive count shifts left, negative right
 			n := mustNum(carOf(x))
@@ -338,7 +338,7 @@ func apply(fn, x, a *Expr) *Expr {
 			} else {
 				result.Rsh(result, uint(-shift.Int64()))
 			}
-			return mkNum(result)
+			return mkOctal(result)
 
 		// ── Atom ↔ character-list conversion ────────────────────────────
 		case "EXPLODE":
@@ -372,7 +372,7 @@ func apply(fn, x, a *Expr) *Expr {
 			return carOf(x)
 
 		// ── SETQ/CSETQ in EVALQUOTE context: (SETQ varname value) ────────
-		case "SETQ", "CSETQ":
+		case "SETQ":
 			vname := carOf(x)
 			if vname == nil || vname.atom == "" {
 				panic("SETQ: first arg must be an atom")
@@ -380,6 +380,14 @@ func apply(fn, x, a *Expr) *Expr {
 			val := eval(carOf(cdrOf(x)), a)
 			definitions[vname.atom] = val
 			return val
+		case "CSETQ":
+			vname := carOf(x)
+			if vname == nil || vname.atom == "" {
+				panic("CSETQ: first arg must be an atom")
+			}
+			val := eval(carOf(cdrOf(x)), a)
+			definitions[vname.atom] = val
+			return cdrOf(x)
 
 		// ── LABEL in EVALQUOTE context: ((name fn) args) ─────────────────
 		// e.g. LABEL ((FAC (LAMBDA (N) ...)) (6))

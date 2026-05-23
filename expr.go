@@ -36,6 +36,39 @@ func mkNum(n *big.Int) *Expr {
 	return &Expr{atom: n.String(), num: new(big.Int).Set(n)}
 }
 
+// formatOctal formats n in IBM 7094 octal Q-notation.
+// Strip trailing base-8 zeros: n = M × 8^E.
+// Display as: "{M in octal}Q{E if E>0 else nothing}"
+// Special case: 0 → "0Q"
+func formatOctal(n *big.Int) string {
+	if n.Sign() == 0 {
+		return "0Q"
+	}
+	val := new(big.Int).Set(n)
+	e := 0
+	eight := big.NewInt(8)
+	rem := new(big.Int)
+	for {
+		q := new(big.Int)
+		q.DivMod(val, eight, rem)
+		if rem.Sign() != 0 {
+			break
+		}
+		val.Set(q)
+		e++
+	}
+	oct := fmt.Sprintf("%o", val)
+	if e > 0 {
+		return fmt.Sprintf("%sQ%d", oct, e)
+	}
+	return fmt.Sprintf("%sQ", oct)
+}
+
+// mkOctal creates a number Expr with IBM 7094 Q-format display string.
+func mkOctal(n *big.Int) *Expr {
+	return &Expr{atom: formatOctal(n), num: new(big.Int).Set(n)}
+}
+
 func mkInt(n int64) *Expr {
 	return mkNum(big.NewInt(n))
 }
