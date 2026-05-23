@@ -86,6 +86,7 @@ func main() {
 				continue
 			}
 			if fnStr == "TUTORIAL" {
+				p.parseExpr() // consume arg list (ignored)
 				RunTutorial(scanner)
 				continue
 			}
