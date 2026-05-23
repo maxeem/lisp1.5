@@ -85,6 +85,10 @@ func main() {
 			case "END", "OF", "LISP", "RUN":
 				continue
 			}
+			if fnStr == "TUTORIAL" {
+				RunTutorial(scanner)
+				continue
+			}
 			fn = mkSym(fnStr)
 		} else {
 			// S1 is a list expression (e.g. a LAMBDA).

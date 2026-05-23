@@ -1,0 +1,969 @@
+.TH LISP1.5 1 "2026" "LISP 1.5" "LISP 1.5 Interpreter"
+.SH NAME
+lisp1.5 \- IBM 7094 LISP 1.5 interpreter
+.SH SYNOPSIS
+.B lisp1.5
+.I file
+.SH DESCRIPTION
+.B lisp1.5
+is a Go implementation of the LISP 1.5 programming language as described
+in the
+.I "LISP 1.5 Programmer's Manual"
+(McCarthy et al., MIT Press, 1962) and the
+.I "LISP 1.5 Primer"
+(Weismann, 1967).
+It is compatible with the IBM 7094 LISP 1.5 emulator at
+.I https://github.com/hanshuebner/llisp.
+.PP
+LISP 1.5 was the second major implementation of LISP, running on the
+IBM 7094 at MIT.  It introduced the EVALQUOTE programming interface,
+property lists, the PROG feature for imperative programming, and many
+built\-in functions that remain standard in descendant dialects.
+.PP
+This implementation uses arbitrary\-precision integers (Go's
+.BR math/big.Int )
+and supports all functions described in the manual and primer.
+There is no floating\-point support; FLOATP always returns NIL.
+.SH EVALQUOTE INTERFACE
+Programs are files of EVALQUOTE pairs.  The first line of each file is
+a free\-form title printed as a header.  The body consists of alternating
+function names and argument lists, terminated by
+.B STOP
+or
+.BR FIN .
+.PP
+.nf
+    TITLE LINE (printed as header)
+
+    FUNCTION-NAME (ARG1 ARG2 ...)
+
+    (LAMBDA (X) BODY) (VALUE)
+
+    DEFINE (((NAME (LAMBDA ...))))
+
+    STOP)))
+         FIN      END OF LISP RUN
+.fi
+.PP
+Arguments in the argument list are NOT re\-evaluated; they are passed as
+literal S\-expressions.  This is the
+.B evalquote
+convention:
+.B evalquote[fn; x]
+=
+.B apply[fn; x; NIL].
+.PP
+Lines longer than 72 characters trigger a warning; the IBM 7094 card
+reader silently truncated lines beyond column 72.
+.SH DATA TYPES
+.TP
+.B Symbolic Atoms
+Sequences of letters, digits, hyphens, and underscores, uppercased on
+input.  Examples:
+.BR A ,
+.BR FOO ,
+.BR MY-VAR ,
+.BR *TRUE* .
+.TP
+.B Numeric Atoms (Fixnums)
+Signed decimal integers of arbitrary precision.  Examples:
+.BR 42 ,
+.BR -7 ,
+.BR 0 .
+Bitwise operations produce atoms printed in IBM 7094 octal Q\-notation
+(e.g.
+.BR 12Q3 ).
+.TP
+.B NIL
+The empty list and the Boolean false value.  Represented as Go
+.B nil
+internally.  The parser converts the atom
+.B NIL
+to the null pointer.
+.TP
+.B *TRUE*
+The conventional truth value returned by predicates.  The atom
+.B T
+also evaluates to
+.B *TRUE*.
+Any non\-NIL S\-expression is true.
+.TP
+.B Lists
+Sequences of S\-expressions enclosed in parentheses.
+.B (A B C)
+is syntactic sugar for
+.B (A\ .\ (B\ .\ (C\ .\ NIL))).
+.TP
+.B Dotted Pairs
+A cons cell written
+.B (A\ .\ B)
+where A is the CAR and B is the CDR.
+.SH SYNTAX
+S\-expressions are either atoms or dotted\-pair lists.
+.PP
+.nf
+    sexpr   ::= atom | "(" listbody ")"
+    listbody ::= ")" | sexpr rest
+    rest    ::= ")" | "." sexpr ")" | sexpr rest
+    atom    ::= symbol | number
+    symbol  ::= letter (letter | digit | "-" | "_" | "*")*
+    number  ::= ["-"] digit+
+.fi
+.PP
+The lexer uppercases all symbol characters.  Semicolons introduce
+line comments.  Single quotes introduce QUOTE shorthand:
+.B 'X
+expands to
+.B (QUOTE X).
+.SH SPECIAL FORMS
+Special forms are evaluated without applying the standard argument
+evaluation rules.
+.TP
+.B QUOTE \fIexpr\fR
+Returns
+.I expr
+unevaluated.
+.TP
+.B COND \fI(p1 e1) (p2 e2) ...\fR
+Evaluates predicates in order; returns the
+.I ei
+for the first
+.I pi
+that is non\-NIL.  Signals an error if no predicate is true.
+Use
+.B T
+as an else clause.
+.TP
+.B LAMBDA \fI(params) body\fR
+Evaluates to itself (a function object).  Applied via
+.B apply
+or
+.BR APPLY .
+.TP
+.B LABEL \fIname lambda\fR
+Creates a self\-referential function by binding
+.I name
+to
+.I lambda
+inside its own body.  Used for anonymous recursion.
+.TP
+.B FEXPR \fI(args alist) body\fR
+Like LAMBDA but receives the unevaluated argument list and the
+current association list as its two parameters.
+.TP
+.B DEFINE \fI(((name1 body1) ...))\fR
+Installs named function definitions in the global symbol table.
+Returns
+.BR *TRUE* .
+.TP
+.B MACRO \fI(((name lambda) ...))\fR
+Defines macro expanders.  When
+.I name
+appears as the head of a form, the whole form is passed to
+.I lambda
+and the result is re\-evaluated.
+.TP
+.B PROG \fI(vars) stmt1 ...\fR
+Imperative block with local mutable variables, GO labels, and RETURN.
+Variables are initialized to NIL.  Returns NIL if execution falls
+off the end.
+.TP
+.B SETQ \fIvar expr\fR
+Assigns the value of
+.I expr
+to
+.IR var .
+If inside a PROG frame that declares
+.IR var ,
+updates the PROG\-local binding; otherwise updates the global
+definition.
+.TP
+.B CSETQ \fIvar expr\fR
+Like SETQ but always sets the global definition, ignoring PROG frames.
+.TP
+.B SET \fIexpr1 expr2\fR
+Like SETQ but evaluates
+.I expr1
+to get the variable name.
+.TP
+.B GO \fIlabel\fR
+Jumps to
+.I label
+within the enclosing PROG.  Works inside COND inside PROG.
+.TP
+.B RETURN \fIexpr\fR
+Exits the enclosing PROG with the value of
+.IR expr .
+Works inside COND inside PROG.
+.TP
+.B AND \fIp1 p2 ...\fR
+Short\-circuit conjunction.  Returns
+.B *TRUE*
+if all arguments are non\-NIL, else NIL.
+.TP
+.B OR \fIp1 p2 ...\fR
+Short\-circuit disjunction.  Returns
+.B *TRUE*
+if any argument is non\-NIL, else NIL.
+.TP
+.B FUNCTION \fIlambda\fR
+Creates a FUNARG closure: captures the current association list and
+packages it with
+.I lambda
+as
+.BR (FUNARG\ lambda\ alist) .
+Use this when passing lambdas to higher\-order functions to avoid the
+FUNARG problem.
+.TP
+.B ERROR \fIarg ...\fR
+Signals an error with the given unevaluated arguments as the message.
+.TP
+.B SELECT \fIval (v1 e1) (v2 e2) ... default\fR
+Evaluates
+.I val
+then finds the first
+.I vi
+equal to it (using EQUAL) and evaluates the corresponding
+.IR ei .
+If no match is found, evaluates
+.IR default .
+.TP
+.B COMMENT \fI...\fR
+Documentation form; evaluates to NIL.  Arguments are ignored.
+.TP
+.B PROG2 \fIe1 e2\fR
+Evaluates both
+.I e1
+and
+.I e2
+and returns the value of
+.IR e2 .
+.SH BUILT-IN FUNCTIONS
+All built\-in functions receive already\-evaluated arguments.
+.SS Elementary Functions
+.TP
+.B CAR \fI(list)\fR
+Returns the first element (CAR) of
+.IR list .
+Returns NIL if
+.I list
+is NIL or an atom.
+.TP
+.B CDR \fI(list)\fR
+Returns the rest (CDR) of
+.IR list .
+Returns NIL if
+.I list
+is NIL or an atom.
+.TP
+.B CONS \fI(x y)\fR
+Constructs a new cons cell with CAR
+.I x
+and CDR
+.IR y .
+.TP
+.B ATOM \fI(x)\fR
+Returns
+.B *TRUE*
+if
+.I x
+is an atom (symbol, number, or NIL); else NIL.
+.TP
+.B EQ \fI(x y)\fR
+Returns
+.B *TRUE*
+if
+.I x
+and
+.I y
+are the same atom.  Do not use on lists; use EQUAL instead.
+.TP
+.B NULL \fI(x)\fR
+Returns
+.B *TRUE*
+if
+.I x
+is NIL.
+.TP
+.B NOT \fI(x)\fR
+Returns
+.B *TRUE*
+if
+.I x
+is NIL.  Identical to NULL.
+.TP
+.B EQUAL \fI(x y)\fR
+Returns
+.B *TRUE*
+if
+.I x
+and
+.I y
+are structurally equal (recursively compares all elements).
+.SS CxR Family
+All compositions of CAR and CDR up to four levels are available:
+.BR CAAR ,
+.BR CADR ,
+.BR CDAR ,
+.BR CDDR ,
+.BR CAAAR ,
+.BR CAADR ,
+\&... through
+.BR CDDDDR .
+.SS Predicates
+.TP
+.B NUMBERP \fI(x)\fR
+Returns
+.B *TRUE*
+if
+.I x
+is a number (fixnum).
+.TP
+.B FIXP \fI(x)\fR
+Returns
+.B *TRUE*
+if
+.I x
+is a fixed\-point (integer) number.  Equivalent to NUMBERP.
+.TP
+.B FLOATP \fI(x)\fR
+Always returns NIL.  There is no floating\-point support.
+.TP
+.B LISTP \fI(x)\fR
+Returns
+.B *TRUE*
+if
+.I x
+is a non\-NIL cons cell (i.e., a list).
+.TP
+.B ZEROP \fI(n)\fR
+Returns
+.B *TRUE*
+if
+.I n
+equals zero.
+.TP
+.B MINUSP \fI(n)\fR
+Returns
+.B *TRUE*
+if
+.I n
+is negative.
+.TP
+.B ONEP \fI(n)\fR
+Returns
+.B *TRUE*
+if
+.I n
+equals one.
+.TP
+.B EVENP \fI(n)\fR
+Returns
+.B *TRUE*
+if
+.I n
+is even.
+.SS Arithmetic
+.TP
+.B PLUS \fI(x y)\fR
+Returns x + y.
+.TP
+.B DIFFERENCE \fI(x y)\fR
+Returns x \- y.
+.TP
+.B TIMES \fI(x y)\fR
+Returns x * y.
+.TP
+.B QUOTIENT \fI(x y)\fR
+Returns the integer quotient of x divided by y (truncates toward zero).
+Panics on division by zero.
+.TP
+.B REMAINDER \fI(x y)\fR
+Returns the remainder of x divided by y.  Sign follows the dividend.
+Panics on division by zero.
+.TP
+.B MINUS \fI(x)\fR
+Returns \-x.
+.TP
+.B ADD1 \fI(x)\fR
+Returns x + 1.
+.TP
+.B SUB1 \fI(x)\fR
+Returns x \- 1.
+.TP
+.B MAX \fI(x y)\fR
+Returns the larger of x and y.
+.TP
+.B MIN \fI(x y)\fR
+Returns the smaller of x and y.
+.TP
+.B ABS \fI(x)\fR
+Returns the absolute value of x.
+.TP
+.B ABSVAL \fI(x)\fR
+Alias for ABS.
+.TP
+.B ENTIER \fI(x)\fR
+Floor function.  Identity for integers (there are no floats).
+.TP
+.B EXPT \fI(x n)\fR
+Returns x raised to the power n.  n must be non\-negative.
+.TP
+.B DIVIDE \fI(x y)\fR
+Returns
+.B (quotient remainder)
+as a two\-element list.
+.TP
+.B GREATERP \fI(x y)\fR
+Returns
+.B *TRUE*
+if x > y.
+.TP
+.B LESSP \fI(x y)\fR
+Returns
+.B *TRUE*
+if x < y.
+.SS Bitwise Operations
+Results are printed in IBM 7094 octal Q\-notation.
+.TP
+.B LOGOR \fI(x y)\fR
+Bitwise OR of x and y.
+.TP
+.B LOGAND \fI(x y)\fR
+Bitwise AND of x and y.
+.TP
+.B LOGXOR \fI(x y)\fR
+Bitwise XOR of x and y.
+.TP
+.B LEFTSHIFT \fI(x n)\fR
+Shifts x left by n bits.  Negative n shifts right.
+.SS List Operations
+.TP
+.B LIST \fI(x1 x2 ...)\fR
+Constructs a list from its arguments.  Returns the argument list as\-is.
+.TP
+.B APPEND \fI(x y)\fR
+Returns a new list formed by appending list y to a copy of list x.
+Non\-destructive.
+.TP
+.B NCONC \fI(x y)\fR
+Destructively appends y to x by modifying the last CDR of x.
+Returns x (or y if x is NIL).
+.TP
+.B REVERSE \fI(lst)\fR
+Returns a new list with elements in reverse order.
+.TP
+.B LENGTH \fI(lst)\fR
+Returns the number of top\-level elements in lst.
+.TP
+.B LAST \fI(lst)\fR
+Returns the last cons cell of lst (a one\-element list containing
+the last element).
+.TP
+.B MEMBER \fI(x lst)\fR
+Returns
+.B *TRUE*
+if x is an element of lst (uses EQUAL for comparison).
+.TP
+.B EFFACE \fI(x lst)\fR
+Returns lst with the
+.I first
+occurrence of x removed.  Non\-destructive.
+.TP
+.B DELETE \fI(x lst)\fR
+Returns lst with
+.I all
+occurrences of x removed.  Non\-destructive.
+.TP
+.B INTERSECTION \fI(x y)\fR
+Returns a list of elements common to both lists x and y.
+.TP
+.B UNION \fI(x y)\fR
+Returns a list of elements in x or y with no duplicates.
+.TP
+.B SUBST \fI(x y z)\fR
+Returns z with every occurrence of y replaced by x (uses EQUAL).
+.TP
+.B SUBLIS \fI(alist z)\fR
+Returns z with atoms substituted according to the association list alist.
+.TP
+.B COPY \fI(x)\fR
+Returns a deep copy of S\-expression x.
+.TP
+.B PAIR \fI(x y)\fR
+Zips two lists x and y into an association list of dotted pairs.
+.TP
+.B PAIRLIS \fI(x y a)\fR
+Like PAIR but prepends the new pairs to the existing list a.
+.TP
+.B ASSOC \fI(x alist)\fR
+Searches alist for the first pair whose CAR is EQ to x.
+Returns the pair (key . value) or NIL if not found.
+.TP
+.B SASSOC \fI(x alist u)\fR
+Like ASSOC but calls function u (with no arguments) if x is not found.
+.SS Destructive Modification
+.TP
+.B RPLACA \fI(cell val)\fR
+Replaces the CAR of cons cell
+.I cell
+with
+.IR val .
+Returns
+.I cell
+(now modified).
+.TP
+.B RPLACD \fI(cell val)\fR
+Replaces the CDR of cons cell
+.I cell
+with
+.IR val .
+Returns
+.I cell
+(now modified).
+.SS Higher\-Order Functions
+.TP
+.B MAPCAR \fI(fn lst)\fR
+Applies
+.I fn
+to each element of
+.I lst
+and returns a list of results.
+Note: takes function first, list second.
+.TP
+.B MAPLIST \fI(fn lst)\fR
+Applies
+.I fn
+to each successive CDR (suffix) of
+.I lst
+and returns a list of results.
+.TP
+.B MAP \fI(fn lst)\fR
+Like MAPLIST but for side effects; returns the terminal atom of lst.
+.TP
+.B MAPC \fI(fn lst)\fR
+Like MAPCAR but for side effects; returns NIL.
+.TP
+.B SEARCH \fI(lst pred found notfound)\fR
+Searches
+.I lst
+for the first element satisfying predicate
+.IR pred .
+If found, applies
+.I found
+to that element.
+If not found, calls
+.I notfound
+with no arguments.
+.TP
+.B APPLY \fI(fn args alist)\fR
+Applies
+.I fn
+to the list
+.IR args ,
+using
+.I alist
+as the association list.
+.TP
+.B EVAL \fI(expr alist)\fR
+Evaluates
+.I expr
+in association list
+.IR alist .
+.SS Property Lists
+.TP
+.B DEFLIST \fI(pairs indicator)\fR
+Sets the property named
+.I indicator
+for multiple atoms at once.
+.I pairs
+is a list of
+.B (atom value)
+pairs.  Returns
+.BR *TRUE* .
+.TP
+.B GET \fI(atom indicator)\fR
+Retrieves the value of property
+.I indicator
+on
+.IR atom .
+Returns NIL if not set.
+Special case: indicator
+.B PNAME
+returns the atom's print name as a list of single\-character atoms.
+.TP
+.B PUTPROP \fI(atom value indicator)\fR
+Sets property
+.I indicator
+on
+.I atom
+to
+.IR value .
+Returns
+.IR value .
+(Extension; use DEFLIST for IBM 7094 emulator compatibility.)
+.TP
+.B REMPROP \fI(atom indicator)\fR
+Removes property
+.I indicator
+from
+.IR atom .
+Returns the old value, or NIL if not set.
+.TP
+.B PROP \fI(atom indicator notfound)\fR
+Like GET but calls function
+.I notfound
+(with no arguments) if the property is missing.
+.TP
+.B ATTRIB \fI(atom pair)\fR
+Adds a property to atom's property list via a dotted pair
+.B (indicator . value).
+Returns the pair.
+.SS Symbol Operations
+.TP
+.B GENSYM \fI()\fR
+Generates a unique symbol of the form
+.BR G00001 ,
+.BR G00002 ,
+etc.  Each call produces a fresh symbol.
+.TP
+.B EXPLODE \fI(x)\fR
+Converts atom
+.I x
+to a list of single\-character atoms.
+.TP
+.B INTERN \fI(chars)\fR
+Converts a list of single\-character atoms to a symbol atom.
+Aliases:
+.BR IMPLODE ,
+.BR COMPRESS .
+.TP
+.B OBLIST \fI()\fR
+Returns a list of all atoms that have global definitions.
+.TP
+.B REMOB \fI(atom)\fR
+Removes
+.I atom
+from the object list (deletes its global definition).
+Returns
+.IR atom .
+.SS Input/Output
+.TP
+.B PRINT \fI(x)\fR
+Prints
+.I x
+and returns
+.IR x .
+.TP
+.B TERPRI \fI()\fR
+Prints a newline and returns NIL.
+.SS Error Handling
+.TP
+.B ERROR \fIarg ...\fR
+Signals an error.  Arguments are collected as the error message.
+.TP
+.B ERRORSET \fI(expr flag)\fR
+Evaluates
+.I expr
+in a protected context.
+Returns
+.B (result)
+on success or NIL on error.
+The
+.I flag
+argument is accepted for compatibility but has no effect.
+.TP
+.B RECLAIM \fI(flag)\fR
+No\-op.  Included for compatibility with the IBM 7094 emulator,
+which used this to trigger garbage collection.
+.TP
+.B TEMPUS-FUGIT \fI()\fR
+Returns NIL.  In the IBM 7094 emulator this printed timing information.
+.SH ARITHMETIC
+All arithmetic operates on arbitrary\-precision integers (fixnums).
+There is no floating\-point support.
+.PP
+Division functions (QUOTIENT, REMAINDER, DIVIDE) truncate toward zero
+and panic on division by zero.
+.PP
+Bitwise operations (LOGOR, LOGAND, LOGXOR, LEFTSHIFT) operate on the
+integer values and return results printed in IBM 7094 octal Q\-notation.
+The format is
+.I mantissa
+followed by
+.B Q
+followed by an optional exponent (the number of trailing octal zeros
+stripped).
+.SH CONTROL FLOW
+.SS COND
+.B (COND (p1 e1) (p2 e2) ... (pn en))
+.PP
+Evaluates predicates left to right.  Returns ei for the first true pi.
+Signals an error if all predicates are NIL.
+.SS PROG
+.nf
+    (PROG (var1 var2 ...)
+      stmt1
+      stmt2
+      LABEL
+      (COND ...)
+      ...)
+.fi
+.PP
+Variables are declared in the var list and initialized to NIL.
+Statements are evaluated for side effects.  Atom positions serve as
+GO labels.  RETURN exits with a value; GO jumps to a label.
+PROG returns NIL if execution falls off the end.
+.PP
+SETQ inside a PROG updates the innermost PROG frame that declares the
+variable, or creates a new entry in the innermost frame if not declared.
+CSETQ always sets the global definition.
+.SS SELECT
+.B (SELECT val (v1 e1) ... default)
+.PP
+Evaluates val, then evaluates each vi (using EQUAL) until a match is
+found.  Returns the corresponding ei.  If no match, evaluates and
+returns default.
+.SH PROPERTY LISTS
+Every atom can have a property list of indicator\-value pairs stored
+in a separate hash map.
+.PP
+The standard way to set properties is DEFLIST; PUTPROP is an extension.
+In the IBM 7094 emulator, property lists are part of the atom's memory
+layout; in this implementation they are stored in a Go map.
+.PP
+The special indicator
+.B PNAME
+is not stored in the map; GET with PNAME computes and returns the
+atom's print name as a list of single\-character atoms.
+.SH HIGHER ORDER FUNCTIONS
+Functions are first\-class values.  Lambda expressions evaluate to
+themselves and can be stored, passed, and returned.
+.PP
+The
+.B FUNARG
+problem arises when a lambda that refers to local variables is passed
+to a higher\-order function and called from a different scope.  Use
+.B (FUNCTION lambda)
+to capture the current association list and create a FUNARG closure.
+.PP
+MAPCAR, MAPLIST, MAP, and MAPC all take the
+.I function
+as the first argument and the
+.I list
+as the second argument (matching the IBM 7094 emulator).
+.SH MACRO SYSTEM
+.nf
+    MACRO (((name (LAMBDA (form) expansion-expr))))
+.fi
+.PP
+When
+.I name
+appears as the head of a form during evaluation, the entire form
+(unevaluated) is passed to the macro lambda.  The result is then
+re\-evaluated in the original context.
+.PP
+The macro lambda receives one argument: the whole form including the
+macro name as its CAR.
+.SH DESTRUCTIVE OPERATIONS
+RPLACA, RPLACD, and NCONC modify existing cons cells.
+.PP
+.B Warning:
+destructive operations can corrupt shared structure.  If two variables
+point to the same cons cell and you modify it via one variable, the
+change is visible through the other.  NCONC on a constant list (e.g.,
+a quoted list) is undefined behavior.
+.PP
+APPEND creates a fresh copy of its first argument; NCONC does not.
+.SH INPUT FORMAT
+.TP
+.B Line 1
+Title line, printed as a header.  Free\-form text.
+.TP
+.B Body
+Alternating S\-expressions: function name then argument list.
+Each function/args pair is an EVALQUOTE call.
+.TP
+.B Comments
+Lines beginning with
+.B ;
+(semicolon) are comment lines in the body.
+.TP
+.B Terminator
+.B STOP
+or
+.B FIN
+ends the session.  A trailing
+.B )))
+is silently skipped.
+.TP
+.B Column limit
+Lines beyond 72 characters trigger a warning to stderr.
+.SH ERRORS
+Errors are signaled as Go panics and caught by the EVALQUOTE loop.
+The error message is printed as
+.BR "ERROR: message" .
+Execution continues with the next EVALQUOTE pair.
+.PP
+To trap errors programmatically use ERRORSET, which returns
+.B (result)
+on success or
+.B NIL
+on error.
+.PP
+Common error conditions:
+.IP \(bu 4
+Unbound variable
+.IP \(bu 4
+Undefined function
+.IP \(bu 4
+Wrong type argument (e.g., taking CAR of a number)
+.IP \(bu 4
+Division by zero
+.IP \(bu 4
+COND with no true clause
+.IP \(bu 4
+PROG: label not found
+.SH IMPLEMENTATION NOTES
+.IP \(bu 4
+All integers are Go
+.BR math/big.Int
+(arbitrary precision).
+.IP \(bu 4
+There is no floating\-point; FLOATP always returns NIL, FIXP and
+NUMBERP test for the presence of a
+.BR big.Int
+value.
+.IP \(bu 4
+NIL is represented as Go
+.B nil
+(the null pointer), not a named atom.
+.IP \(bu 4
+.B *TRUE*
+is a single global
+.BR *Expr
+pointer.  T evaluates to the same pointer.
+.IP \(bu 4
+Property lists use a Go
+.B map[string]map[string]*Expr
+separate from the atom representation.  The IBM 7094 stored property
+lists in the atoms' word fields.
+.IP \(bu 4
+PUTPROP is an extension (not in the IBM 7094 emulator); use DEFLIST
+for maximum compatibility.
+.IP \(bu 4
+PROG frames are stored in a global stack (not the a\-list) so that
+SETQ can efficiently find and update variables across nested eval calls.
+.IP \(bu 4
+GENSYM counter is global and persists across all evaluations in a run.
+.IP \(bu 4
+The octal Q\-notation format for bitwise results strips trailing octal
+zeros: the value is written as
+.I MQE
+where M is the mantissa in octal and E is the count of stripped zeros
+(omitted if zero).
+.SH COMPATIBILITY
+.SS Present in this interpreter but not the IBM 7094 emulator
+.TP
+.B PUTPROP
+Use DEFLIST instead.
+.TP
+.B EVENP, ONEP, LISTP
+Additional predicates from the Weismann primer.
+.TP
+.B ABSVAL
+Alias for ABS.
+.TP
+.B ENTIER
+Floor; identity for integers.
+.TP
+.B INTERSECTION, UNION
+Set operations.
+.TP
+.B SELECT
+Case/switch form.
+.TP
+.B MACRO
+Macro expanders.
+.SS Present in the IBM 7094 emulator but noted differences
+.TP
+.B MAPCAR argument order
+This interpreter uses (MAPCAR fn list) matching the emulator;
+some later LISP dialects reversed the order.
+.TP
+.B FLOATP
+Always returns NIL.  The IBM 7094 emulator distinguished fixnums
+and floatnums.
+.TP
+.B Property lists
+Implemented as Go hash maps rather than inline atom memory fields.
+.TP
+.B RECLAIM
+No\-op; Go manages memory automatically.
+.SH EXAMPLES
+.SS Factorial
+.nf
+       FACTORIAL EXAMPLE
+
+DEFINE (((FACTORIAL (LAMBDA (N)
+  (COND ((ZEROP N) 1)
+        (T (TIMES N (FACTORIAL (SUB1 N)))))))))
+
+FACTORIAL (6)
+
+STOP)))
+       FIN      END OF LISP RUN
+.fi
+.SS Iterative Fibonacci (PROG)
+.nf
+DEFINE (((IFIB (LAMBDA (N)
+  (PROG (A B I)
+    (SETQ A 0)
+    (SETQ B 1)
+    (SETQ I 0)
+  LOOP
+    (COND ((EQUAL I N) (RETURN A)))
+    (PROG (TEMP)
+      (SETQ TEMP (PLUS A B))
+      (SETQ A B)
+      (SETQ B TEMP))
+    (SETQ I (ADD1 I))
+    (GO LOOP)))))
+
+IFIB (10)
+.fi
+.SS Property Lists
+.nf
+DEFLIST (((CAT ANIMAL) (DOG ANIMAL) (OAK PLANT)) TYPE)
+
+GET (CAT TYPE)
+
+PUTPROP (CAT 4 LEGS)
+
+GET (CAT LEGS)
+.fi
+.SS MAPCAR with FUNCTION
+.nf
+DEFINE (((ADDER (LAMBDA (N)
+           (FUNCTION (LAMBDA (X) (PLUS X N)))))))
+
+DEFINE (((ADD3 (LAMBDA (X) (PLUS X 3)))))
+
+MAPCAR (ADD3 (1 2 3 4 5))
+.fi
+.SS ERRORSET
+.nf
+ERRORSET ((PLUS 1 2) NIL)
+
+ERRORSET ((CAR FOO) NIL)
+.fi
+.SH SEE ALSO
+.PP
+.I "LISP 1.5 Programmer's Manual"
+(McCarthy, Abrahams, Edwards, Hart, Levin; MIT Press, 1962)
+.PP
+.I "A LISP 1.5 Primer"
+(Clark Weismann; Wadsworth, 1967)
+.PP
+IBM 7094 LISP 1.5 Emulator:
+.I https://github.com/hanshuebner/llisp

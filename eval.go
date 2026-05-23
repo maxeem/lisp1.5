@@ -333,6 +333,11 @@ func apply(fn, x, a *Expr) *Expr {
 
 		// ── Meta / I/O ──────────────────────────────────────────────────
 		case "APPLY":
+			// (APPLY fn args a-list) — use provided a-list if given, else current a
+			provided := carOf(cdrOf(cdrOf(x)))
+			if provided != nil {
+				return apply(carOf(x), carOf(cdrOf(x)), provided)
+			}
 			return apply(carOf(x), carOf(cdrOf(x)), a)
 		case "EVAL":
 			// (EVAL expr a-list)
@@ -417,7 +422,7 @@ func apply(fn, x, a *Expr) *Expr {
 			}
 			val := eval(carOf(cdrOf(x)), a)
 			definitions[vname.atom] = val
-			return cdrOf(x)
+			return val
 
 		// ── LABEL in EVALQUOTE context: ((name fn) args) ─────────────────
 		// e.g. LABEL ((FAC (LAMBDA (N) ...)) (6))
