@@ -36,13 +36,25 @@ var lessons = []lesson{
       FUNCTION (ARGS)
     where FUNCTION is either an atom naming a function or a LAMBDA
     expression, and ARGS is a list of already-evaluated arguments.
+    Because each argument is already quoted, a list argument must be
+    wrapped in an extra pair of parentheses.
 
-  EXAMPLES:
-    Input:    CAR (A B C)
-    Output:   *TRUE*
+  EXAMPLES (from Weissman's LISP 1.5 Primer):
 
-    Input:    PLUS (3 5)
-    Output:   8
+    Input:    CAR ((A B C D))
+    Output:   A
+
+    Input:    CDR ((A B C D))
+    Output:   (B C D)
+
+    Input:    CONS (A (B C D))
+    Output:   (A B C D)
+
+    Input:    PLUS (1 2 3)
+    Output:   6
+
+    Input:    (LAMBDA (ONE TWO) (CONS TWO ONE)) (A B)
+    Output:   (B . A)
 
   You can type any LISP expression at the tutorial prompt.  The function
   name is evaluated with the argument list as already-quoted values,
