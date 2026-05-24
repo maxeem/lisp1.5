@@ -29,6 +29,12 @@ var progStack *progFrame
 type progReturn struct{ val *Expr }
 type progGo struct{ label string }
 
+// condNoClause is panicked by evcon when no COND clause is true.
+// Inside PROG it means fall-through; everywhere else it surfaces as an error.
+type condNoClause struct{}
+
+func (condNoClause) String() string { return "COND: no true clause" }
+
 func pushProgFrame(vars *Expr) {
 	f := &progFrame{vars: make(map[string]*Expr), prev: progStack}
 	for v := vars; v != nil; v = cdrOf(v) {
@@ -121,9 +127,9 @@ func apply(fn, x, a *Expr) *Expr {
 
 		// ── Arithmetic ──────────────────────────────────────────────────
 		case "PLUS":
-			return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Add(a, b) })
+			return arithFold(x, new(big.Int), func(a, b *big.Int) *big.Int { return new(big.Int).Add(a, b) })
 		case "TIMES":
-			return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Mul(a, b) })
+			return arithFold(x, big.NewInt(1), func(a, b *big.Int) *big.Int { return new(big.Int).Mul(a, b) })
 		case "DIFFERENCE":
 			return arith2(x, func(a, b *big.Int) *big.Int { return new(big.Int).Sub(a, b) })
 		case "QUOTIENT":
@@ -166,17 +172,27 @@ func apply(fn, x, a *Expr) *Expr {
 
 		// ── Arithmetic extensions ────────────────────────────────────────
 		case "MAX":
-			a2, b2 := mustNum(carOf(x)), mustNum(carOf(cdrOf(x)))
-			if a2.Cmp(b2) >= 0 {
-				return mkNum(new(big.Int).Set(a2))
+			if x == nil {
+				panic("MAX: requires at least one argument")
 			}
-			return mkNum(new(big.Int).Set(b2))
+			result := new(big.Int).Set(mustNum(carOf(x)))
+			for rest := cdrOf(x); rest != nil; rest = cdrOf(rest) {
+				if v := mustNum(carOf(rest)); v.Cmp(result) > 0 {
+					result.Set(v)
+				}
+			}
+			return mkNum(result)
 		case "MIN":
-			a2, b2 := mustNum(carOf(x)), mustNum(carOf(cdrOf(x)))
-			if a2.Cmp(b2) <= 0 {
-				return mkNum(new(big.Int).Set(a2))
+			if x == nil {
+				panic("MIN: requires at least one argument")
 			}
-			return mkNum(new(big.Int).Set(b2))
+			result := new(big.Int).Set(mustNum(carOf(x)))
+			for rest := cdrOf(x); rest != nil; rest = cdrOf(rest) {
+				if v := mustNum(carOf(rest)); v.Cmp(result) < 0 {
+					result.Set(v)
+				}
+			}
+			return mkNum(result)
 		case "ABS", "ABSVAL":
 			return mkNum(new(big.Int).Abs(mustNum(carOf(x))))
 		case "ENTIER":
@@ -269,6 +285,9 @@ func apply(fn, x, a *Expr) *Expr {
 		case "MAPLIST":
 			// (MAPLIST x fn) — x first, fn second
 			return maplistExpr(carOf(cdrOf(x)), carOf(x), a)
+		case "MAPCON":
+			// (MAPCON x fn) — x first, fn second; like MAPLIST but NCONC's results
+			return mapconExpr(carOf(cdrOf(x)), carOf(x), a)
 		case "MAP":
 			// (MAP x fn) — x first, fn second
 			return mapExpr(carOf(cdrOf(x)), carOf(x), a)
@@ -621,7 +640,7 @@ func eval(e, a *Expr) *Expr {
 // evcon evaluates a COND clause list.
 func evcon(clauses, a *Expr) *Expr {
 	if clauses == nil {
-		panic("COND: no true clause")
+		panic(condNoClause{})
 	}
 	clause := carOf(clauses)
 	if isTrue(eval(carOf(clause), a)) {
@@ -641,8 +660,10 @@ func evlis(m, a *Expr) *Expr {
 // ── DEFINE ───────────────────────────────────────────────────────────────────
 
 // doDefine processes: x = (((name1 body1) (name2 body2) ...))
+// Returns a list of the atom names defined, as per the LISP 1.5 manual.
 func doDefine(x *Expr) *Expr {
 	defList := carOf(x)
+	var head, tail *Expr
 	for defList != nil {
 		def := carOf(defList)
 		name := carOf(def)
@@ -651,9 +672,20 @@ func doDefine(x *Expr) *Expr {
 			panic("DEFINE: invalid function name")
 		}
 		definitions[name.atom] = body
+		node := mkCons(name, nil)
+		if head == nil {
+			head = node
+			tail = node
+		} else {
+			tail.cdr = node
+			tail = node
+		}
 		defList = cdrOf(defList)
 	}
-	return exprTrue
+	if head == nil {
+		return nil
+	}
+	return head
 }
 
 // doMacro processes: x = (((name1 lambda1) ...)) — stores in macros map.
@@ -740,6 +772,8 @@ func evalProg(args, a *Expr) *Expr {
 							returned = true
 						case progGo:
 							goLabel = v.label
+						case condNoClause:
+							// COND with no true clause inside PROG falls through (NIL)
 						default:
 							panic(r)
 						}
@@ -862,6 +896,16 @@ func arith2(x *Expr, op func(*big.Int, *big.Int) *big.Int) *Expr {
 	return mkNum(op(mustNum(carOf(x)), mustNum(carOf(cdrOf(x)))))
 }
 
+// arithFold reduces x left-to-right starting from identity using op.
+func arithFold(x *Expr, identity *big.Int, op func(*big.Int, *big.Int) *big.Int) *Expr {
+	acc := new(big.Int).Set(identity)
+	for x != nil {
+		acc = op(acc, mustNum(carOf(x)))
+		x = cdrOf(x)
+	}
+	return mkNum(acc)
+}
+
 // ── Boolean helpers ───────────────────────────────────────────────────────────
 
 func applyAnd(x *Expr) *Expr {
@@ -954,7 +998,7 @@ func lastExpr(lst *Expr) *Expr {
 		return nil
 	}
 	if cdrOf(lst) == nil {
-		return lst
+		return carOf(lst)
 	}
 	return lastExpr(cdrOf(lst))
 }
@@ -1003,6 +1047,15 @@ func maplistExpr(fn, lst, a *Expr) *Expr {
 	}
 	result := apply(fn, mkCons(lst, nil), a)
 	return mkCons(result, maplistExpr(fn, cdrOf(lst), a))
+}
+
+// mapconExpr applies fn to successive CDR sublists and joins results with NCONC.
+func mapconExpr(fn, lst, a *Expr) *Expr {
+	if lst == nil {
+		return nil
+	}
+	result := apply(fn, mkCons(lst, nil), a)
+	return nconcExpr(result, mapconExpr(fn, cdrOf(lst), a))
 }
 
 // mapExpr applies fn to lst and successive CDR segments until atom; returns terminal atom.
